@@ -1,0 +1,12 @@
+{
+    "version": "1.0.0",
+    "hook": {
+        "path": "/usr/local/bin/hook",
+        "args": [ "hook", "-s" ]
+    },
+    "when": {
+        "always": true
+    },
+    "stages": [ "prestart" ]
+}
+
