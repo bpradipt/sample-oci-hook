@@ -56,14 +56,14 @@ func main() {
 
 	if *start {
 		log.Info("Starting actual hook")
-		if err := modifyMount(); err != nil {
+		if err := startRakshHook(); err != nil {
 			log.Fatal(err)
 		}
 	}
 }
 
 // Modify the Raksh secrets mount-point
-func modifyMount() error {
+func startRakshHook() error {
 	//Hook receives container State in Stdin
 	//https://github.com/opencontainers/runtime-spec/blob/master/config.md#posix-platform-hooks
 	//https://github.com/opencontainers/runtime-spec/blob/master/runtime.md#state
@@ -78,8 +78,51 @@ func modifyMount() error {
 	//log spec to file
 	log.Infof("spec.State is %v", s)
 
+	bundlePath := s.Bundle
+	containerPid := s.Pid
+
+	//Get source mount path for Raksh secrets
+	rakshSrcMountPath, err := getMountSrcFromConfigJson(bundlePath, "raksh")
+	if err != nil {
+		log.Errorf("unable to get source mount path %s", err)
+		return err
+	}
+
+	//Read the Raksh secrets
+	rakshSecretData, err := readRakshSecrets(rakshSrcMountPath)
+	if err != nil {
+		log.Errorf("unable to read Raksh secret data %s", err)
+		return err
+	}
+
+	//Decrypt the Raksh secrets
+	rakshDecryptedData, err := decryptRakshSecrets(rakshSecretData)
+	if err != nil {
+		log.Errorf("unable to decrypt Raksh secret data %s", err)
+		return err
+	}
+
+	err = writeDecryptedRakshDataToSharedDir(rakshDecryptedData, containerSharedMemDir)
+	if err != nil {
+		log.Infof("Error writing the decrypted Raksh secret data to containerSharedMemDirFile", err)
+		return err
+	}
+
+	err = modifyRakshBindMount(containerPid)
+	if err != nil {
+		log.Infof("Error modifying the Raksh mount point", err)
+		return err
+	}
+
+	return nil
+}
+
+//Get source path of bind mount
+func getMountSrcFromConfigJson(configJsonDir string, destMountPath string) (string, error) {
+
+	var srcMountPath string
 	//Take out the config.json from the bundle and edit the mount points
-	configJsonPath := filepath.Join(s.Bundle, "config.json")
+	configJsonPath := filepath.Join(configJsonDir, "config.json")
 
 	log.Infof("Config.json location: %s", configJsonPath)
 	//Read the JSON
@@ -87,51 +130,73 @@ func modifyMount() error {
 	jsonData, err := ioutil.ReadFile(configJsonPath)
 	if err != nil {
 		log.Errorf("unable to read config.json %s", err)
-		return err
+		return "", err
 	}
 	err = json.Unmarshal(jsonData, &config)
 	if err != nil {
 		log.Errorf("unable to unmarshal config.json %s", err)
-		return err
+		return "", err
 	}
 	for _, m := range config.Mounts {
 		log.Infof("src: %s  ==  dest: %s", m.Source, m.Destination)
 		//Check if dest is raksh
-		if strings.Contains(m.Destination, "raksh") == true {
+		if strings.Contains(m.Destination, destMountPath) == true {
 			//Read the contents and log
 			//The src is a directory
-			rakshSrcFile := filepath.Join(m.Source, rakshProperties)
-			rakshSrcContent, _ := ioutil.ReadFile(rakshSrcFile)
-			log.Infof("Raksh src data %s", string(rakshSrcContent))
-
-			//This will be empty since the src has not yet been mounted in the prestart phase
-			//rakshDestContent, _ := ioutil.ReadFile(m.Destination)
-			//log.Infof("Raksh dst data %s", string(rakshDestContent))
-
-			//Copy the data to VM's memory. This is not share with the containers
-			err = os.MkdirAll(vmMemDir, os.ModeDir)
-			if err != nil {
-				log.Infof("Error creating vmMemDir", err)
-				return err
-			}
-			vmMemDirFile := filepath.Join(vmMemDir, rakshProperties)
-
-			err = ioutil.WriteFile(vmMemDirFile, rakshSrcContent, 0644)
-			if err != nil {
-				log.Infof("Error writing the data to vmMemDirFile", err)
-				return err
-			}
-			//Shared memory between VM and containers
-			containerSharedMemDirFile := filepath.Join(containerSharedMemDir, rakshProperties)
-			err = ioutil.WriteFile(containerSharedMemDirFile, rakshSrcContent, 0644)
-			if err != nil {
-				log.Infof("Error writing the data to containerSharedMemDirFile", err)
-				return err
-			}
+			srcMountPath = m.Source
 			break
 		}
 	}
 
-	log.Debugf("Config struct %s\n", string(jsonData))
+	return srcMountPath, nil
+
+}
+
+//Read the raksh secrets
+func readRakshSecrets(srcPath string) ([]byte, error) {
+
+	srcFile := filepath.Join(srcPath, rakshProperties)
+	secretData, err := ioutil.ReadFile(srcFile)
+	if err != nil {
+		log.Errorf("Unable to read raksh secrets %s", err)
+		return nil, err
+	}
+
+	log.Infof("Raksh secret data %s", string(secretData))
+	return secretData, nil
+}
+
+//Decrypt the Raksh secrets
+func decryptRakshSecrets(secretData []byte) ([]byte, error) {
+
+	//Decrypt the secret data - local/remote attestation etc
+
+	return secretData, nil
+}
+
+//Copy the Raksh secret in VM memory for use with container
+func writeDecryptedRakshDataToSharedDir(decryptedData []byte, destPath string) error {
+
+	containerSharedMemDirFile := filepath.Join(destPath, rakshProperties)
+	err := ioutil.WriteFile(containerSharedMemDirFile, decryptedData, 0644)
+	if err != nil {
+		log.Infof("Error writing the data to containerSharedMemDirFile", err)
+		return err
+	}
 	return nil
+}
+
+//Modify Raksh Bind mount
+func modifyRakshBindMount(pid int) error {
+
+	log.Infof("modifying bind mount")
+
+	// Enter_namespaces_of_process(containerPid)
+	// - mnt (/proc/containerPid/ns/mnt)
+	// - pid (/proc/containerPid/ns/pid)
+	// umount /etc/raksh
+	// mount -o bind containerSharedMemDir /etc/raksh
+
+	return nil
+
 }
