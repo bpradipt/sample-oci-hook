@@ -83,7 +83,7 @@ func startRakshHook() error {
 
 	//Get source mount path for Raksh secrets
 	rakshSrcMountPath, err := getMountSrcFromConfigJson(bundlePath, "raksh")
-	if err != nil {
+        if (rakshSrcMountPath == "") || (err != nil) {
 		log.Errorf("unable to get source mount path %s", err)
 		return err
 	}
