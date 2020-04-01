@@ -32,7 +32,7 @@ const (
 
 func main() {
 
-	log.Out = os.Stdout
+        log.Out = os.Stdout
 
 	dname, err := ioutil.TempDir("", "hooklog")
 	fname := filepath.Join(dname, "hook.log")
@@ -148,6 +148,8 @@ func getMountSrcFromConfigJson(configJsonDir string, destMountPath string) (stri
 		}
 	}
 
+        log.Infof("mount src from config.json: %s", srcMountPath)
+
 	return srcMountPath, nil
 
 }
@@ -155,6 +157,7 @@ func getMountSrcFromConfigJson(configJsonDir string, destMountPath string) (stri
 //Read the raksh secrets
 func readRakshSecrets(srcPath string) ([]byte, error) {
 
+	log.Infof("Raksh secret data path %s", srcPath)
 	srcFile := filepath.Join(srcPath, rakshProperties)
 	secretData, err := ioutil.ReadFile(srcFile)
 	if err != nil {
@@ -169,6 +172,7 @@ func readRakshSecrets(srcPath string) ([]byte, error) {
 //Decrypt the Raksh secrets
 func decryptRakshSecrets(secretData []byte) ([]byte, error) {
 
+	log.Infof("Decrypt Raksh secrets")
 	//Decrypt the secret data - local/remote attestation etc
 
 	return secretData, nil
@@ -176,6 +180,8 @@ func decryptRakshSecrets(secretData []byte) ([]byte, error) {
 
 //Copy the Raksh secret in VM memory for use with container
 func writeDecryptedRakshDataToSharedDir(decryptedData []byte, destPath string) error {
+
+	log.Infof("Write decrypted Raksh secrets to VM memory")
 
 	containerSharedMemDirFile := filepath.Join(destPath, rakshProperties)
 	err := ioutil.WriteFile(containerSharedMemDirFile, decryptedData, 0644)
