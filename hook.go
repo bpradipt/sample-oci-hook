@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/opencontainers/runc/libcontainer/configs"
@@ -28,11 +30,12 @@ const (
 	vmMemDir = "/run/svm"
 	//Shared memory mapped directory within the Kata VM and the containers
 	containerSharedMemDir = "/run/kata-containers/sandbox/shm"
+	rakshSharedMemDir     = "/run/kata-containers/sandbox/shm/raksh"
 )
 
 func main() {
 
-        log.Out = os.Stdout
+	log.Out = os.Stdout
 
 	dname, err := ioutil.TempDir("", "hooklog")
 	fname := filepath.Join(dname, "hook.log")
@@ -76,14 +79,14 @@ func startRakshHook() error {
 	}
 
 	//log spec to file
-	log.Infof("spec.State is %v", s)
+	log.Debugf("spec.State is %v", s)
 
 	bundlePath := s.Bundle
 	containerPid := s.Pid
 
 	//Get source mount path for Raksh secrets
 	rakshSrcMountPath, err := getMountSrcFromConfigJson(bundlePath, "raksh")
-        if (rakshSrcMountPath == "") || (err != nil) {
+	if (rakshSrcMountPath == "") || (err != nil) {
 		log.Errorf("unable to get source mount path %s", err)
 		return err
 	}
@@ -102,13 +105,13 @@ func startRakshHook() error {
 		return err
 	}
 
-	err = writeDecryptedRakshDataToSharedDir(rakshDecryptedData, containerSharedMemDir)
+	err = writeDecryptedRakshDataToSharedDir(rakshDecryptedData, rakshSharedMemDir)
 	if err != nil {
 		log.Infof("Error writing the decrypted Raksh secret data to containerSharedMemDirFile", err)
 		return err
 	}
 
-	err = modifyRakshBindMount(containerPid)
+	err = modifyRakshBindMount(containerPid, bundlePath)
 	if err != nil {
 		log.Infof("Error modifying the Raksh mount point", err)
 		return err
@@ -148,7 +151,7 @@ func getMountSrcFromConfigJson(configJsonDir string, destMountPath string) (stri
 		}
 	}
 
-        log.Infof("mount src from config.json: %s", srcMountPath)
+	log.Infof("mount src from config.json: %s", srcMountPath)
 
 	return srcMountPath, nil
 
@@ -183,8 +186,14 @@ func writeDecryptedRakshDataToSharedDir(decryptedData []byte, destPath string) e
 
 	log.Infof("Write decrypted Raksh secrets to VM memory")
 
+	err := os.MkdirAll(destPath, 0755)
+	if err != nil {
+		log.Infof("Error creating destPath", err)
+		return err
+	}
+
 	containerSharedMemDirFile := filepath.Join(destPath, rakshProperties)
-	err := ioutil.WriteFile(containerSharedMemDirFile, decryptedData, 0644)
+	err = ioutil.WriteFile(containerSharedMemDirFile, decryptedData, 0644)
 	if err != nil {
 		log.Infof("Error writing the data to containerSharedMemDirFile", err)
 		return err
@@ -193,16 +202,74 @@ func writeDecryptedRakshDataToSharedDir(decryptedData []byte, destPath string) e
 }
 
 //Modify Raksh Bind mount
-func modifyRakshBindMount(pid int) error {
+func modifyRakshBindMount(pid int, bundlePath string) error {
 
-	log.Infof("modifying bind mount")
+	log.Infof("modifying bind mount for process %d", pid)
 
 	// Enter_namespaces_of_process(containerPid)
 	// - mnt (/proc/containerPid/ns/mnt)
 	// - pid (/proc/containerPid/ns/pid)
-	// umount /etc/raksh
-	// mount -o bind containerSharedMemDir /etc/raksh
+	// un mount /etc/raksh
+	// mount /etc/raksh in tmpfs
+	// Copy decrypted data from rakshSharedMemDir to /etc/raksh
 
+	// secret is mounted in the following path /run/kata-containers/shared/containers/<container_id>/rootfs/etc/raksh
+	mntDest := filepath.Join(bundlePath, "/rootfs/etc/raksh")
+	args := []string{"-t", strconv.Itoa(pid), "-m", "-p", "umount", mntDest}
+	cmd := exec.Command("nsenter", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Error in executing umount ", err)
+		log.Infof("out ", string(out))
+		return err
+	}
+
+	args = []string{"-t", strconv.Itoa(pid), "-m", "-p", "mount"}
+	cmd = exec.Command("nsenter", args...)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Error in executing mount ", err)
+		log.Infof("out ", string(out))
+		return err
+	}
+
+	log.Debugf("Existing mount list inside the container : ", string(out))
+
+	//Copy secrets from rakshSharedMemDir to /etc/raksh
+	srcPath := filepath.Join(rakshSharedMemDir, rakshProperties)
+	destPath := filepath.Join(bundlePath, "/rootfs/etc/raksh")
+
+	args = []string{"-m", "-p", "-t", strconv.Itoa(pid), "mount", "-t", "tmpfs", "tmpfs", destPath}
+	cmd = exec.Command("nsenter", args...)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Error in executing tmpfs mount ", err)
+		log.Infof("out ", string(out))
+		return err
+	}
+
+	args = []string{"-m", "-p", "-t", strconv.Itoa(pid), "cp", "-a", srcPath, destPath}
+	cmd = exec.Command("nsenter", args...)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Error in executing copy command ", err)
+		log.Infof("out ", string(out))
+		return err
+	}
+	log.Infof("ls out ", string(out))
+
+	//Delete the secrets from rakshSharedMemDir
+	args = []string{"-m", "-p", "-t", strconv.Itoa(pid), "rm", "-rf", rakshSharedMemDir}
+	cmd = exec.Command("nsenter", args...)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Infof("Error in deleting directory ", err)
+		log.Infof("out ", string(out))
+		return err
+	}
+	log.Infof("ls out ", string(out))
+
+	log.Infof("Modifying bind mount complete")
 	return nil
 
 }
