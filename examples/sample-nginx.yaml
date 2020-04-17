@@ -1,0 +1,36 @@
+---
+apiVersion: v1
+data:
+  nginx: aN8z4uDnGlxoEWo6PM2nuvtuvzD7dGS51eSBgUeUBflk0yUNPttGqENLFtEOSVN1sdnd9c08emE/0l2dJ9rk8Zc9F5im+MSxzg32yhAAe/toIB9MbxeNh4mheiMqc1pxiGO0FrKqzVWHivGGf+SD5yGIiEgHBjgfXzeDhP7/IhaGGHfq8fXVKvX7VX01JlgMRGXWf6w=
+kind: ConfigMap
+metadata:
+  name: secure-configmap-nginx
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: nginx
+  namespace: default
+  name: nginx
+spec:
+  runtimeClassName: kata-runtime
+  containers:
+    - image: nginx
+      imagePullPolicy: IfNotPresent
+      name: nginx
+      ports:
+        - containerPort: 80
+          protocol: TCP
+      volumeMounts:
+        - mountPath: /etc/raksh
+          name: secure-volume-nginx
+          readOnly: true
+  volumes:
+    - configMap:
+        items:
+        - key: nginx
+          path: raksh.properties
+        name: secure-configmap-nginx
+      name: secure-volume-nginx
